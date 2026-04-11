@@ -117,6 +117,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 | "检查知识库"、"健康检查"、"lint" | → **lint** |
 | "知识库状态"、"现在有什么"、"有多少素材" | → **status** |
 | "画个知识图谱"、"看看关联图"、"graph"、"知识库地图" | → **graph** |
+| "删除素材"、"remove"、"delete source"、"移除" | → **delete** |
 
 **重要**：如果用户直接给了一个 URL 或文件，但没有明确说要做什么，默认走 **ingest** 工作流。如果知识库还不存在，先自动走 **init** 再走 **ingest**。
 
@@ -190,18 +191,23 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    bash ${SKILL_DIR}/scripts/init-wiki.sh "<路径>" "<主题>"
    ```
 
-5. **写入语言配置并本地化种子文件**：
+5. **补充初始化结果说明**：
+   - `init-wiki.sh` 会同时生成 `purpose.md` 和 `.wiki-cache.json`
+   - `purpose.md` 和 `.wiki-schema.md` 同级存放，用来记录研究目标、关键问题和研究范围
+   - 提醒用户优先填写核心目标和关键问题；这些内容写在 `purpose.md` 里，后续 ingest 会优先参考这里的方向
+
+6. **写入语言配置并本地化种子文件**：
    - 将 `.wiki-schema.md` 中的 `语言：{{LANGUAGE}}` 替换为：
      - `zh` → `语言：中文`（种子文件保持中文，无需额外处理）
      - `en` → `语言：English`，**同时**覆写以下种子文件为英文版：
    - 如果 `WIKI_LANG=en`，读取 `${SKILL_DIR}/templates/index-en-template.md`、`${SKILL_DIR}/templates/overview-en-template.md`、`${SKILL_DIR}/templates/log-en-template.md`，将 `{{DATE}}` 和 `{{TOPIC}}` 替换为实际值后，分别写入 `index.md`、`wiki/overview.md`、`log.md`
 
-6. **记录路径**到 `~/.llm-wiki-path`：
+7. **记录路径**到 `~/.llm-wiki-path`：
    ```bash
    echo "<路径>" > ~/.llm-wiki-path
    ```
 
-7. **输出引导**（根据 `WIKI_LANG` 切换语言）：
+8. **输出引导**（根据 `WIKI_LANG` 切换语言）：
 
    **中文（zh）**：
    ```
@@ -289,35 +295,82 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    - 文件名格式：`{日期}-{短标题}.md`
    - 如果是 URL 类素材，在文件头部记录原始 URL
 
-3. **阅读素材，提取关键信息**：
-   - 核心观点（3-5 个要点）
-   - 关键概念（3-5 个，需要创建或更新的实体）
-   - 与已有素材的关联
+3. **读取上下文**：
+   - 优先顺序：`purpose.md` > `.wiki-schema.md` > `index.md`
+   - 如果 `purpose.md` 存在，先读取其中的核心目标、关键问题和研究范围
+   - 用 `purpose.md` 指导后续实体、主题、关联的取舍和权重
 
-4. **生成素材摘要页**（`wiki/sources/{日期}-{短标题}.md`）：
+4. **缓存检查**：
+   - 在进入 LLM 处理前，先运行：
+     ```bash
+     bash ${SKILL_DIR}/scripts/cache.sh check "<raw 文件路径>"
+     ```
+   - 如果返回 `HIT` → 跳过本次 LLM 调用，直接读取已有 wiki 页面，并告诉用户这是“无变化，直接复用已有结果”
+   - 如果返回 `MISS` → 继续执行下面的两步流程
+
+5. **Step 1：结构化分析**：
+   - 输入：原始内容 + `purpose.md` + 现有 wiki 结构（至少读取 `index.md` 概要）
+   - 输出：JSON 格式的分析结果，不持久化，只在当前 ingest 流程里临时传递
+   - JSON 至少包含 `entities`、`topics`、`connections`
+   - `confidence` 是必需字段，缺失就视为格式异常并触发单步回退
+
+   ```json
+   {
+     "source_summary": "一句话概括",
+     "entities": [{"name": "xxx", "type": "concept", "relevance": "high", "confidence": "EXTRACTED"}],
+     "topics": [{"name": "xxx", "importance": "high"}],
+     "connections": [{"from": "A", "to": "B", "type": "因果", "confidence": "INFERRED"}],
+     "contradictions": [{"claim_a": "...", "claim_b": "...", "context": "..."}],
+     "new_vs_existing": {"new_entities": [], "updates": []}
+   }
+   ```
+
+6. **Step 2：页面生成**：
+   - 输入：原始内容 + `purpose.md` + Step 1 的分析结果 + 现有相关 wiki 页面
+   - 输出：所有需要创建或更新的 wiki 页面内容
+   - Step 2 负责完成原流程中的素材摘要、实体页、主题页、index、log 更新
+
+7. **容错回退**：
+   - 如果 Step 1 不是有效 JSON，或者缺少 `entities`、`topics`、`confidence` 等必需字段，自动回退到原来的单步流程
+   - 回退时，所有本次新生成内容统一加上：
+     ```markdown
+     <!-- confidence: UNVERIFIED -->
+     ```
+   - 同时在页面顶部加注释说明本次处理因格式问题降级，避免出现“部分标注、部分没标注”的状态
+
+8. **生成素材摘要页**（`wiki/sources/{日期}-{短标题}.md`）：
    - 参考 `templates/source-template.md` 的格式
    - 包含：基本信息、核心观点、关键概念、与其他素材的关联、原文精彩摘录
+   - 对 Step 1 中标记为 `INFERRED` 或 `AMBIGUOUS` 的关系，用 HTML 注释保留置信度：
+     ```markdown
+     <!-- confidence: INFERRED -->
+     <!-- confidence: AMBIGUOUS -->
+     ```
 
-5. **更新或创建实体页**（`wiki/entities/`）：
+9. **更新或创建实体页**（`wiki/entities/`）：
    - 对每个关键概念，检查 `wiki/entities/` 下是否已有对应页面
    - 如果已有 → 追加新信息，更新"不同素材中的观点"部分
    - 如果没有 → 创建新实体页，参考 `templates/entity-template.md`
    - 使用 `[[实体名]]` 语法做双向链接
 
-6. **更新或创建主题页**（`wiki/topics/`）：
+10. **更新或创建主题页**（`wiki/topics/`）：
    - 识别素材涉及的主要研究主题
    - 如果已有对应主题页 → 更新素材汇总表和核心观点
    - 如果没有 → 创建新主题页，参考 `templates/topic-template.md`
 
-7. **更新 index.md**：
+11. **更新 index.md**：
    - 在对应分类下添加新条目
    - 更新概览统计数字
 
-8. **更新 log.md**：
-   - 追加格式：`## {日期} ingest | {素材标题}`
+12. **更新 log.md 和缓存**：
+   - log.md 追加格式：`## {日期} ingest | {素材标题}`
    - 记录新增和更新的页面列表
+   - 当前流程成功写完后，运行：
+     ```bash
+     bash ${SKILL_DIR}/scripts/cache.sh update "<raw 文件路径>" "wiki/sources/{日期}-{短标题}.md"
+     ```
 
-9. **向用户展示结果**（按 `WIKI_LANG` 切换语言）：
+13. **向用户展示结果**（按 `WIKI_LANG` 切换语言）：
 
    **中文（zh）**：
    ```
@@ -341,16 +394,20 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 适用于短推文、小红书笔记、简短评论等。
 
 1. **保存原始素材**到对应 `raw/` 目录
-2. **生成简化摘要页**（`wiki/sources/`）：
+2. **读取上下文并检查缓存**：
+   - 仍然优先读取 `purpose.md`
+   - 仍然先运行 `bash ${SKILL_DIR}/scripts/cache.sh check "<raw 文件路径>"`
+   - 如果缓存命中，直接复用已有结果
+3. **生成简化摘要页**（`wiki/sources/`）：
    - 只包含基本信息和核心观点
    - 不写"原文精彩摘录"部分
-3. **提取 1-3 个关键概念**：
+4. **提取 1-3 个关键概念**：
    - 如果对应实体页已存在 → 追加一句话说明
    - 如果不存在 → 在摘要页中用 `[待创建: [[概念名]]]` 标记
-4. **更新 index.md 和 log.md**
-5. **跳过**：主题页创建/更新、overview 更新
+5. **更新 index.md、log.md 和缓存**
+6. **跳过**：主题页创建/更新、overview 更新
 
-6. **向用户展示简化结果**（按 `WIKI_LANG` 切换语言）：
+7. **向用户展示简化结果**（按 `WIKI_LANG` 切换语言）：
 
    **中文（zh）**：
    ```
@@ -393,7 +450,9 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    （英文版按「输出语言规则」生成，结构相同。）
 
 4. **逐个处理**：对每个文件执行 ingest 工作流
-   - 根据内容长度自动选择完整/简化处理
+   - 每个文件先 `cache check`
+   - 命中缓存的文件直接跳过，不再进入 LLM 处理
+   - 只有 `MISS` 的文件才继续执行完整或简化处理
 
 5. **每 5 个文件后暂停**，展示进度并询问是否继续（按 `WIKI_LANG` 切换语言）：
 
@@ -419,6 +478,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    批量消化完成！
 
    处理了 {N} 个文件：
+   - 已跳过 N 个（无变化），处理 M 个（新增/更新）
    - 成功：{S}
    - 跳过（内容为空/格式不支持）：{K}
    - 失败：{F}
@@ -531,6 +591,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    - `wiki/topics/` 下的页面数
    - `wiki/sources/` 下的页面数
    - `wiki/comparisons/` 和 `wiki/synthesis/` 下的页面数
+   - `purpose.md 是否存在`
 4. 读取 `log.md` 最后 5 条记录
 5. 读取 `index.md` 获取主题概览
 6. 运行 `bash ${SKILL_DIR}/scripts/adapter-state.sh summary-human` 获取外挂状态
@@ -551,6 +612,9 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
      - 素材摘要：{N}
      - 对比分析：{N}
      - 综合分析：{N}
+
+   研究方向：
+   - purpose.md 是否存在：{是/否}
 
    最近活动：
    - {日期} ingest | {素材标题}
@@ -698,5 +762,68 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 
    孤立页面（未纳入图谱）：
    - [[某页面]]（建议添加到相关实体页或主题页）
+   ```
+   （英文版按「输出语言规则」生成，结构相同。）
+
+---
+
+## 工作流 9：delete（删除素材）
+
+### 触发关键词
+
+"删除素材"、"remove"、"delete source"、"移除"
+
+### 前置检查
+
+执行**通用前置检查**（见上方定义）。如果没有可用知识库，提示用户先初始化。
+
+### 步骤
+
+1. **识别目标素材**：
+   - 在 `raw/` 下搜索用户提到的素材名
+   - 如果匹配到多个候选，先列出候选文件让用户确认
+
+2. **扫描影响范围**：
+   - 先运行：
+     ```bash
+     bash ${SKILL_DIR}/scripts/delete-helper.sh scan-refs "<wiki 根目录>" "<素材文件名>"
+     ```
+   - 用脚本返回的页面列表作为引用扫描结果
+   - 逐页判断是“删除整页”还是“保留页面但移除该素材引用”
+
+3. **安全确认**：
+   - 如果影响超过 5 个页面时，先把受影响页面完整列给用户，再做二次确认
+   - 如果某个实体或主题只被这个素材引用，提示用户是否连同页面一起删除
+
+4. **执行级联清理**：
+   - 删除 `raw/` 下对应原始文件
+   - 删除 `wiki/sources/` 下对应素材摘要页
+   - 对 `wiki/entities/`、`wiki/topics/`、`wiki/comparisons/`、`wiki/synthesis/` 中仍需保留的页面，只移除该素材相关的引用段落
+   - 更新 `index.md`
+   - 在 `log.md` 追加删除记录
+   - 标记 `wiki/overview.md` 需要重新生成
+
+5. **清理缓存**：
+   - 删除完成后，对对应 raw 文件运行：
+     ```bash
+     bash ${SKILL_DIR}/scripts/cache.sh invalidate "<raw 文件路径>"
+     ```
+
+6. **断链检查**：
+   - 用 grep 或 `delete-helper.sh` 再扫一遍指向已删除页面的链接
+   - 清理明确可判定的断链；如果归属不清，保留原文并提示用户后续人工确认
+
+7. **向用户报告结果**：
+
+   **zh**：
+   ```
+   已删除：
+     - raw/articles/2024-01-15-ai-article.md
+     - wiki/sources/2024-01-15-ai-article.md
+   已更新（移除引用）：
+     - wiki/entities/AI-Agent.md
+     - wiki/topics/大语言模型.md
+   需要重新生成：
+     - wiki/overview.md
    ```
    （英文版按「输出语言规则」生成，结构相同。）

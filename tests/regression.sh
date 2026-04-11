@@ -270,6 +270,84 @@ test_cache_script_handles_miss_hit_and_invalidate() {
     [ "$output" = "MISS" ] || fail "Expected invalidated cache check to be MISS"
 }
 
+test_skill_md_phase2_init_mentions_purpose_and_cache() {
+    local section
+    section="$(sed -n '/## 工作流 1：init/,/## 工作流 2：ingest/p' "$REPO_ROOT/SKILL.md")"
+
+    assert_text_contains "$section" "purpose.md"
+    assert_text_contains "$section" ".wiki-cache.json"
+    assert_text_contains "$section" "填写核心目标和关键问题"
+}
+
+test_skill_md_phase2_ingest_mentions_two_step_cache_and_confidence() {
+    local section
+    section="$(sed -n '/## 工作流 2：ingest/,/## 工作流 3：batch-ingest/p' "$REPO_ROOT/SKILL.md")"
+
+    assert_text_contains "$section" '`purpose.md` > `.wiki-schema.md` > `index.md`'
+    assert_text_contains "$section" 'bash ${SKILL_DIR}/scripts/cache.sh check'
+    assert_text_contains "$section" "Step 1：结构化分析"
+    assert_text_contains "$section" "Step 2：页面生成"
+    assert_text_contains "$section" '"confidence": "EXTRACTED"'
+    assert_text_contains "$section" "<!-- confidence: UNVERIFIED -->"
+    assert_text_contains "$section" "页面顶部加注释说明本次处理因格式问题降级"
+}
+
+test_skill_md_phase2_batch_ingest_mentions_cache_skip_summary() {
+    local section
+    section="$(sed -n '/## 工作流 3：batch-ingest/,/## 工作流 4：query/p' "$REPO_ROOT/SKILL.md")"
+
+    assert_text_contains "$section" '每个文件先 `cache check`'
+    assert_text_contains "$section" "已跳过 N 个（无变化），处理 M 个（新增/更新）"
+}
+
+test_skill_md_phase2_status_mentions_purpose_presence() {
+    local section
+    section="$(sed -n '/## 工作流 6：status/,/## 工作流 7：digest/p' "$REPO_ROOT/SKILL.md")"
+
+    assert_text_contains "$section" "purpose.md 是否存在"
+}
+
+test_skill_md_phase2_has_delete_workflow_and_route() {
+    local route_section delete_section
+    route_section="$(sed -n '/## 工作流路由/,/## 通用前置检查/p' "$REPO_ROOT/SKILL.md")"
+    delete_section="$(sed -n '/## 工作流 9：delete/,$p' "$REPO_ROOT/SKILL.md")"
+
+    assert_text_contains "$route_section" '"删除素材"、"remove"、"delete source"、"移除"'
+    assert_text_contains "$route_section" "→ **delete**"
+    assert_text_contains "$delete_section" "影响超过 5 个页面时"
+    assert_text_contains "$delete_section" 'bash ${SKILL_DIR}/scripts/delete-helper.sh scan-refs'
+    assert_text_contains "$delete_section" "cache.sh invalidate"
+}
+
+test_delete_helper_scans_reference_files() {
+    local tmp_dir wiki_root output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+
+    wiki_root="$tmp_dir/delete-wiki"
+    mkdir -p "$wiki_root"/raw/articles
+    mkdir -p "$wiki_root"/wiki/{sources,entities,topics}
+
+    printf '原文\n' > "$wiki_root/raw/articles/2024-01-15-ai-article.md"
+    cat > "$wiki_root/wiki/sources/2024-01-15-ai-article.md" <<'EOF'
+---
+sources: ["raw/articles/2024-01-15-ai-article.md"]
+---
+
+[source: AI 文章](../raw/articles/2024-01-15-ai-article.md)
+EOF
+    printf '见 raw/articles/2024-01-15-ai-article.md\n' > "$wiki_root/wiki/entities/AI-Agent.md"
+    printf '引用 [source: AI 文章](../raw/articles/2024-01-15-ai-article.md)\n' > "$wiki_root/wiki/topics/大语言模型.md"
+
+    output="$(
+        bash "$REPO_ROOT/scripts/delete-helper.sh" scan-refs "$wiki_root" "2024-01-15-ai-article.md" 2>&1
+    )" || fail "delete-helper scan-refs should succeed"
+
+    assert_text_contains "$output" "wiki/entities/AI-Agent.md"
+    assert_text_contains "$output" "wiki/sources/2024-01-15-ai-article.md"
+    assert_text_contains "$output" "wiki/topics/大语言模型.md"
+}
+
 test_readme_sections() {
     assert_file_contains "$REPO_ROOT/README.md" "## 前置条件"
     assert_file_contains "$REPO_ROOT/README.md" "## 常见问题"
@@ -558,6 +636,12 @@ test_init_fills_language_placeholder
 test_phase1_templates_exist
 test_init_creates_purpose_and_cache_files
 test_cache_script_handles_miss_hit_and_invalidate
+test_skill_md_phase2_init_mentions_purpose_and_cache
+test_skill_md_phase2_ingest_mentions_two_step_cache_and_confidence
+test_skill_md_phase2_batch_ingest_mentions_cache_skip_summary
+test_skill_md_phase2_status_mentions_purpose_presence
+test_skill_md_phase2_has_delete_workflow_and_route
+test_delete_helper_scans_reference_files
 test_readme_sections
 test_uv_tool_install_failure_is_graceful
 test_skill_md_routes_wechat_to_new_tool
