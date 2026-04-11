@@ -125,9 +125,6 @@ llm-wiki-skill 已有完整的知识管理工作流（init/ingest/batch-ingest/q
 - ingest 时用 purpose.md 指导实体/主题的分类和权重
 - **query 和 digest 的 purpose.md 集成作为后续增强**，等用户实际填写了 purpose.md 后再验证价值（YAGNI）
 
-**4. 工作流路由表更新：**
-- 在 SKILL.md 的工作流路由表中增加 purpose.md 相关触发词
-
 **4. wiki-compat.sh 修改：**
 - 旧 wiki 没有 purpose.md 时，不影响任何功能（向后兼容）
 - status workflow 报告 purpose.md 是否存在
@@ -410,60 +407,75 @@ query 持久化前，先在 `wiki/queries/` 下搜索是否已有同主题页面
 
 ---
 
-## 改进 7: Always-on Hook（自动注入 Wiki 上下文）
+## 改进 7: 自动注入 Wiki 上下文
 
 ### 来源
 
-借鉴自 graphify 的 PreToolUse hook 模式。graphify 在 AI agent 搜索文件前自动注入图谱上下文。
+借鉴自 graphify 的 hook 模式和 claude-mem 插件的 SessionStart 模式。
+
+### Phase 0 验证结果
+
+原设计使用 PreToolUse hook + `Grep|Glob|Read` 匹配器 + echo 纯文本输出。经验证：
+
+1. **echo 纯文本不会被 LLM 看到** — hook 输出必须是结构化 JSON（`{"systemMessage": "..."}` 或 `{"hookSpecificOutput": {"additionalContext": "..."}}`），纯文本等于对着空气说话
+2. **PreToolUse 每次工具调用都触发** — 在典型会话中触发几十次，每次注入提醒是噪音轰炸
+3. **结论：PreToolUse 不适合这个场景**
+
+### 新方案：SessionStart hook
+
+改用 **SessionStart hook**。每次会话开始触发一次，通过 `hookSpecificOutput.additionalContext` 注入 wiki 路径信息。
 
 ### 平台支持现状
 
 | 平台 | Hook 支持 | 方案 |
 |------|----------|------|
-| Claude Code | PreToolUse hook（已验证） | 注册 hook，调用脚本 |
-| Codex | 不支持 PreToolUse hook | 在 AGENTS.md 开头注入 wiki 上下文提示 |
-| OpenClaw | 内部 hook 机制（不兼容 PreToolUse） | 调研 hooks.internal 是否可用，暂不支持 |
+| Claude Code | SessionStart hook（已验证可行） | 注册 hook，调用脚本输出 JSON |
+| Codex | 不支持 SessionStart hook | 在 AGENTS.md 开头注入 wiki 上下文提示 |
+| OpenClaw | 内部 hook 机制（不兼容） | 暂不支持 |
 
 ### 设计
 
-**Claude Code 平台（唯一支持完整 hook 的平台）：**
+**Claude Code 平台：**
 
-修改 `~/.claude/settings.json`，注册 PreToolUse hook。**hook command 调用独立脚本**，不内联字符串：
+修改 `~/.claude/settings.json`，注册 SessionStart hook：
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [{
-      "matcher": "Grep|Glob|Read",
+    "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "bash ~/.claude/skills/llm-wiki/scripts/hook-context-inject.sh"
+        "command": "bash ~/.claude/skills/llm-wiki/scripts/hook-session-start.sh"
       }]
     }]
   }
 }
 ```
 
-新增 `scripts/hook-context-inject.sh`：
+新增 `scripts/hook-session-start.sh`：
 ```bash
 #!/usr/bin/env bash
-# 读取 wiki 路径
+# SessionStart hook: 会话开始时注入 wiki 上下文（只触发一次）
 WIKI_PATH=""
 [ -f ~/.llm-wiki-path ] && WIKI_PATH=$(cat ~/.llm-wiki-path)
 
-# 如果没有 wiki 路径，尝试当前目录
+# 尝试当前目录
 if [ -z "$WIKI_PATH" ] && [ -f .wiki-schema.md ]; then
   WIKI_PATH="$(pwd)"
 fi
 
-# 没有检测到 wiki，静默退出（不输出任何内容，Claude Code 会忽略空输出）
-[ -z "$WIKI_PATH" ] && exit 0
+# 没有 wiki，静默返回空 JSON
+[ -z "$WIKI_PATH" ] && echo '{}' && exit 0
+[ ! -f "$WIKI_PATH/.wiki-schema.md" ] && echo '{}' && exit 0
 
-# wiki 路径下没有 schema，静默退出
-[ ! -f "$WIKI_PATH/.wiki-schema.md" ] && exit 0
+# 通过 additionalContext 注入（LLM 会看到这段文字）
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[llm-wiki] 检测到知识库: %s/index.md，回答问题时优先查阅 wiki 内容获取上下文"}}\n' "$WIKI_PATH"
+```
 
-# 输出上下文注入提示
-echo "[llm-wiki] 检测到知识库：$WIKI_PATH/index.md"
+**Codex 平台：**
+在安装 skill 时，在项目的 `AGENTS.md` 开头追加一行：
+```
+<!-- llm-wiki context: 如有知识库，优先查阅 wiki/index.md -->
 ```
 
 ### settings.json 安全机制
@@ -471,30 +483,27 @@ echo "[llm-wiki] 检测到知识库：$WIKI_PATH/index.md"
 - **备份：** 修改前复制到 `settings.json.bak.llm-wiki`
 - **幂等：** 用 `jq` 检查 hook 是否已存在（按 command 字符串匹配），已存在则跳过
 - **合并：** 用 `jq` 做数组追加而非覆盖，保留用户已有的其他 hooks
-- **回滚：** 提供 `--uninstall-hooks` 标志，从 settings.json 中移除 llm-wiki 的 hook 条目（不是删除整个 hooks 配置）
+- **回滚：** 提供 `--uninstall-hooks` 标志，从 settings.json 中移除 llm-wiki 的 hook 条目
 
 ### install.sh 行为
 
 - `install.sh --platform claude` — 默认不注册 hook
-- `install.sh --platform claude --install-hooks` — 安装 skill 后注册 hook
+- `install.sh --platform claude --install-hooks` — 安装 skill 后注册 SessionStart hook
 - `install.sh --install-hooks`（skill 已安装）— 只注册 hook，不重新安装 skill 文件
 - `install.sh --uninstall-hooks` — 移除 hook（从 settings.json 中删除 llm-wiki 条目）
 
-### 前置验证（必须先做）
-
-在投入实现前，先用最小 hook 验证 Claude Code 的 PreToolUse hook 输出是否会被 LLM 看到并影响其行为。如果 hook 输出只被记录到日志而不注入 conversation context，整个 P6 价值为零，应取消。
-
 ### 为什么有效
 
-现在用户必须主动说"查一下 wiki 里的 X"才能触发知识库。有了 hook，AI agent 每次搜索文件时都会先看 wiki 上下文，知识库的使用频率会大幅提升。
+现在用户必须主动说"查一下 wiki 里的 X"才能触发知识库。SessionStart hook 每次会话开始提醒一次，不吵不闹，AI agent 自然会在需要时查阅 wiki。比 PreToolUse 安静几十倍。
 
 ---
 
 ## 综合实施路线
 
 ```
-Phase 0: 前置验证（P6 可行性）
-  └── 在 Claude Code 中测试最小 PreToolUse hook，验证输出是否注入 conversation context
+Phase 0: 前置验证（P6 可行性）✓ 已完成
+  └── PreToolUse hook 方案验证失败（echo 纯文本不可见，且触发频率太高）
+  └── 改用 SessionStart hook 方案（每次会话触发一次，通过 additionalContext 注入）
 
 Phase 1: 基础设施（P0-P3 地基 + P5 模板提前准备）
   ├── 新增 purpose-template.md / purpose-en-template.md
@@ -514,8 +523,8 @@ Phase 3: 知识积累增强（P5）
   ├── 修改 query workflow（结果持久化 + 重复检测 + 二级来源标记）
   └── query 页面 frontmatter 加 derived: true
 
-Phase 4: 平台集成（P6，仅在 Phase 0 验证通过后执行）
-  ├── 新增 scripts/hook-context-inject.sh（条件检测 + 路径解析）
+Phase 4: 平台集成（P6，已验证 SessionStart hook 可行）
+  ├── 新增 scripts/hook-session-start.sh（SessionStart hook + additionalContext 注入）
   ├── 修改 install.sh（hook 注册 + 幂等检查 + 备份 + --uninstall-hooks）
   └── 仅 Claude Code 平台支持 hook，Codex 用 AGENTS.md 注入
 
@@ -557,6 +566,10 @@ Phase 5: 兼容性 + 测试
 - ~~实施路线 query-template.md 位置错误~~ → 移至 Phase 1 提前准备
 - ~~--install-hooks 行为不明确~~ → 明确三种模式（安装+hooks / hooks-only / uninstall）
 
+**Phase 0 验证结果：**
+- ~~P6 PreToolUse hook + echo 纯文本~~ → **验证失败**。echo 输出不会被 LLM 看到，且 PreToolUse 每次工具调用都触发，噪音不可接受。整个 PreToolUse 方案废弃
+- **P6 新方案：SessionStart hook** → 每次会话开始触发一次，通过 `additionalContext` 字段注入 wiki 路径。脚本输出结构化 JSON `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`
+
 ## Success Criteria
 
 - [ ] 新 init 生成的 wiki 包含 purpose.md 和 .wiki-cache.json
@@ -568,8 +581,8 @@ Phase 5: 兼容性 + 测试
 - [ ] 降级回退时所有内容标注 UNVERIFIED，页面顶部有降级说明
 - [ ] query 结果可持久化到 wiki/queries/，带 derived: true 标记
 - [ ] 连续 query 同一主题不产生内容冲突
-- [ ] install.sh 支持 --install-hooks 注册 PreToolUse hook（仅 Claude Code）
-- [ ] hook 在非 wiki 项目中静默退出，不产生噪音
+- [ ] install.sh 支持 --install-hooks 注册 SessionStart hook（仅 Claude Code）
+- [ ] hook 在非 wiki 项目中静默返回空 JSON，不产生噪音
 - [ ] --uninstall-hooks 可正确移除 hook
 - [ ] regression tests 全部通过
 
