@@ -15,13 +15,18 @@ scan_refs() {
   local needle="$2"
   local wiki_dir="$wiki_root/wiki"
 
+  [ -n "$needle" ] || {
+    echo "素材文件名不能为空" >&2
+    exit 1
+  }
+
   [ -d "$wiki_dir" ] || {
     echo "知识库目录不存在：$wiki_dir" >&2
     exit 1
   }
 
   {
-    grep -rl --include='*.md' -- "$needle" "$wiki_dir" 2>/dev/null || true
+    grep -rlF --include='*.md' -- "$needle" "$wiki_dir" 2>/dev/null || true
   } | python3 -c '
 import os
 import sys

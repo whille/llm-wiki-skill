@@ -35,7 +35,7 @@ echo ""
 
 # 创建目录结构（包含小红书和知乎）
 mkdir -p "$WIKI_ROOT"/raw/{articles,tweets,wechat,xiaohongshu,zhihu,pdfs,notes,assets}
-mkdir -p "$WIKI_ROOT"/wiki/{entities,topics,sources,comparisons,synthesis}
+mkdir -p "$WIKI_ROOT"/wiki/{entities,topics,sources,comparisons,synthesis,queries}
 
 echo "[完成] 目录结构已创建"
 

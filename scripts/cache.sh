@@ -224,7 +224,8 @@ cache_invalidate() {
   local file_path="$1"
   local wiki_root cache_file relative_path_value
 
-  require_file "$file_path"
+  # 不调用 require_file：文件可能已被删除（级联删除场景）
+  # 直接通过路径查找缓存条目
   wiki_root="$(find_wiki_root "$file_path")" || {
     echo "未找到知识库根目录：$file_path" >&2
     exit 1
