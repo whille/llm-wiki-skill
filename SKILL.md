@@ -118,6 +118,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 | "知识库状态"、"现在有什么"、"有多少素材" | → **status** |
 | "画个知识图谱"、"看看关联图"、"graph"、"知识库地图" | → **graph** |
 | "删除素材"、"remove"、"delete source"、"移除" | → **delete** |
+| "结晶化"、"crystallize"、"把这个记进知识库"、"总结这段对话" | → **crystallize** |
 
 **重要**：如果用户直接给了一个 URL 或文件，但没有明确说要做什么，默认走 **ingest** 工作流。如果知识库还不存在，先自动走 **init** 再走 **ingest**。
 
@@ -324,6 +325,20 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
      "new_vs_existing": {"new_entities": [], "updates": []}
    }
    ```
+
+   置信度赋值规则（Claude 必须遵守）：
+- EXTRACTED：信息直接出现在原文里，字面可以找到
+- INFERRED：信息是从多处原文推断出来的，原文没有直接说
+- AMBIGUOUS：原文说法不清楚，或者有歧义
+- UNVERIFIED：信息来自 Claude 的背景知识，原文没有证据
+
+   Step 1 完成后，必须执行验证：
+1. mkdir -p {wiki_root}/.wiki-tmp
+2. 将 Step 1 JSON 写入 {wiki_root}/.wiki-tmp/step1-latest.json
+3. 调用 bash ${SKILL_DIR}/scripts/validate-step1.sh {wiki_root}/.wiki-tmp/step1-latest.json
+4. 验证完成后删除 {wiki_root}/.wiki-tmp/step1-latest.json
+
+   如果脚本返回非 0，自动回退到单步 ingest（不进行 Step 2）。
 
 6. **Step 2：页面生成**：
    - 输入：原始内容 + `purpose.md` + Step 1 的分析结果 + 现有相关 wiki 页面
@@ -859,3 +874,33 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
      - wiki/overview.md
    ```
    （英文版按「输出语言规则」生成，结构相同。）
+
+---
+
+## 工作流 10：crystallize（结晶化）
+
+**触发条件**：
+用户说"结晶化"、"crystallize"、"把这个记进知识库"、"这段对话很有价值"
+
+**输入**：
+用户主动提供的内容（文字粘贴进对话，或明确引用某段上下文）。
+用户必须主动提供内容，Claude 不自动提取当前会话。
+
+**处理步骤（MVP）**：
+
+1. 用户提供内容（文字粘贴进对话）
+2. Claude 从内容中提取：
+   - 核心洞见（3-5 条）
+   - 关键决策和原因
+   - 值得记录的结论
+3. 生成 `wiki/synthesis/sessions/{主题}-{日期}.md`，格式参考 `templates/synthesis-template.md`
+4. 更新 `wiki/log.md`（记录本次结晶化操作）
+
+> MVP 版本不自动创建 entity 页面，不自动更新 index.md。
+
+**confidence 规则**：
+结晶化来源的内容默认标记为 `INFERRED`（来自推断/对话，非原始文档）。
+
+**输出示例**：
+已创建 wiki/synthesis/sessions/AI-agent-设计决策-20260413.md
+已更新 wiki/log.md

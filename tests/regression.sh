@@ -759,6 +759,98 @@ test_install_warns_when_managed_source_is_missing() {
     assert_file_contains "$REPO_ROOT/install.sh" "安装源文件缺失，跳过"
 }
 
+test_validate_step1_no_args_exits_with_usage() {
+    local output
+    if output="$(bash "$REPO_ROOT/scripts/validate-step1.sh" 2>&1)"; then
+        fail "validate-step1.sh should exit non-zero with no args"
+    fi
+    assert_text_contains "$output" "usage"
+}
+
+test_validate_step1_valid_json_passes() {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    printf '%s\n' '{"entities":[{"name":"test","confidence":"EXTRACTED"}],"topics":[],"connections":[],"contradictions":[],"new_vs_existing":{}}' \
+        > "$tmp_dir/step1.json"
+    bash "$REPO_ROOT/scripts/validate-step1.sh" "$tmp_dir/step1.json" \
+        || fail "validate-step1.sh should pass with valid JSON"
+}
+
+test_validate_step1_missing_confidence_fails() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    printf '%s\n' '{"entities":[{"name":"test"}],"topics":[],"connections":[],"contradictions":[],"new_vs_existing":{}}' \
+        > "$tmp_dir/step1.json"
+    if output="$(bash "$REPO_ROOT/scripts/validate-step1.sh" "$tmp_dir/step1.json" 2>&1)"; then
+        fail "validate-step1.sh should fail when confidence is missing"
+    fi
+    assert_text_contains "$output" "MISSING"
+}
+
+test_validate_step1_invalid_confidence_value_fails() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    printf '%s\n' '{"entities":[{"name":"test","confidence":"HIGH"}],"topics":[],"connections":[],"contradictions":[],"new_vs_existing":{}}' \
+        > "$tmp_dir/step1.json"
+    if output="$(bash "$REPO_ROOT/scripts/validate-step1.sh" "$tmp_dir/step1.json" 2>&1)"; then
+        fail "validate-step1.sh should fail with invalid confidence value"
+    fi
+    assert_text_contains "$output" "HIGH"
+}
+
+test_validate_step1_entities_not_array_fails() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    printf '%s\n' '{"entities":{},"topics":[],"connections":[],"contradictions":[],"new_vs_existing":{}}' \
+        > "$tmp_dir/step1.json"
+    if output="$(bash "$REPO_ROOT/scripts/validate-step1.sh" "$tmp_dir/step1.json" 2>&1)"; then
+        fail "validate-step1.sh should fail when entities is not an array"
+    fi
+    assert_text_contains "$output" "entities"
+}
+
+test_validate_step1_empty_entities_array_passes() {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    printf '%s\n' '{"entities":[],"topics":[],"connections":[],"contradictions":[],"new_vs_existing":{}}' \
+        > "$tmp_dir/step1.json"
+    bash "$REPO_ROOT/scripts/validate-step1.sh" "$tmp_dir/step1.json" \
+        || fail "validate-step1.sh should pass with empty entities array"
+}
+
+test_skill_md_ingest_has_confidence_assignment_rules() {
+    local section
+    section="$(sed -n '/## 工作流 2：ingest/,/## 工作流 3：batch-ingest/p' "$REPO_ROOT/SKILL.md")"
+    assert_text_contains "$section" "EXTRACTED：信息直接出现在原文里"
+    assert_text_contains "$section" "INFERRED："
+    assert_text_contains "$section" "AMBIGUOUS："
+    assert_text_contains "$section" "UNVERIFIED："
+    assert_text_contains "$section" "validate-step1.sh"
+}
+
+test_skill_md_has_crystallize_workflow_and_route() {
+    local route_section crystallize_section
+    route_section="$(sed -n '/## 工作流路由/,/## 通用前置检查/p' "$REPO_ROOT/SKILL.md")"
+    crystallize_section="$(sed -n '/## 工作流 10：crystallize/,$p' "$REPO_ROOT/SKILL.md")"
+    assert_text_contains "$route_section" "crystallize"
+    assert_text_contains "$crystallize_section" "wiki/synthesis/sessions/"
+    assert_text_contains "$crystallize_section" "INFERRED"
+}
+
+test_init_creates_synthesis_sessions_subdir() {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    bash "$REPO_ROOT/scripts/init-wiki.sh" "$tmp_dir/wiki" "测试知识库" > /dev/null 2>&1 \
+        || fail "init-wiki.sh should succeed"
+    assert_path_exists "$tmp_dir/wiki/wiki/synthesis/sessions"
+}
+
 test_setup_runs_on_bash_3_2
 test_install_dry_run_for_claude
 test_install_auto_refuses_ambiguous_platforms
@@ -803,6 +895,15 @@ test_skill_status_and_ingest_align_to_registry
 test_schema_template_aligns_source_boundary_to_registry
 test_install_prints_source_boundary_from_registry
 test_install_warns_when_managed_source_is_missing
+test_validate_step1_no_args_exits_with_usage
+test_validate_step1_valid_json_passes
+test_validate_step1_missing_confidence_fails
+test_validate_step1_invalid_confidence_value_fails
+test_validate_step1_entities_not_array_fails
+test_validate_step1_empty_entities_array_passes
+test_skill_md_ingest_has_confidence_assignment_rules
+test_skill_md_has_crystallize_workflow_and_route
+test_init_creates_synthesis_sessions_subdir
 
 bash "$REPO_ROOT/tests/adapter-state.sh" || fail "adapter-state.sh 测试失败"
 
