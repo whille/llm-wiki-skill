@@ -894,7 +894,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    - 关键决策和原因
    - 值得记录的结论
 3. 生成 `wiki/synthesis/sessions/{主题}-{日期}.md`，格式参考 `templates/synthesis-template.md`
-4. 更新 `wiki/log.md`（记录本次结晶化操作）
+4. 更新 `log.md`（记录本次结晶化操作）
 
 > MVP 版本不自动创建 entity 页面，不自动更新 index.md。
 
@@ -903,4 +903,4 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 
 **输出示例**：
 已创建 wiki/synthesis/sessions/AI-agent-设计决策-20260413.md
-已更新 wiki/log.md
+已更新 log.md
