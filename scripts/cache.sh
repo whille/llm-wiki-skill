@@ -141,8 +141,10 @@ cache_check() {
 
   result="$(
     python3 - "$cache_file" "$wiki_root" "$relative_path_value" "$current_hash" <<'PY'
+import hashlib
 import json
 import os
+import pathlib
 import sys
 
 cache_file, wiki_root, relative_path, current_hash = sys.argv[1:5]
@@ -151,17 +153,40 @@ with open(cache_file, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
 entry = data.get("entries", {}).get(relative_path)
+
+# 无 cache entry → 尝试自愈（exact filename stem match）
 if not entry:
-    print("MISS")
+    raw_stem = pathlib.Path(relative_path).stem
+    sources_dir = os.path.join(wiki_root, "wiki", "sources")
+    if os.path.isdir(sources_dir):
+        for f in os.listdir(sources_dir):
+            if pathlib.Path(f).stem == raw_stem and f.endswith(".md"):
+                # 找到匹配的 source 页面 → 自愈
+                source_page = os.path.join("wiki", "sources", f)
+                timestamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                entries = data.setdefault("entries", {})
+                entries[relative_path] = {
+                    "hash": current_hash,
+                    "ingested_at": timestamp,
+                    "source_page": source_page,
+                }
+                tmp_file = cache_file + ".tmp"
+                with open(tmp_file, "w", encoding="utf-8") as fh2:
+                    json.dump(data, fh2, ensure_ascii=False, indent=2)
+                    fh2.write("\n")
+                os.replace(tmp_file, cache_file)
+                print("HIT(repaired)")
+                raise SystemExit(0)
+    print("MISS:no_entry")
     raise SystemExit(0)
 
 if entry.get("hash") != current_hash:
-    print("MISS")
+    print("MISS:hash_changed")
     raise SystemExit(0)
 
 source_page = entry.get("source_page")
 if not source_page:
-    print("MISS")
+    print("MISS:no_entry")
     raise SystemExit(0)
 
 source_path = source_page
@@ -169,7 +194,7 @@ if not os.path.isabs(source_path):
     source_path = os.path.join(wiki_root, source_path)
 
 if not os.path.isfile(source_path):
-    print("MISS")
+    print("MISS:no_source")
 else:
     print("HIT")
 PY

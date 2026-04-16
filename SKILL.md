@@ -339,10 +339,14 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 4. **缓存检查**：
    - 在进入 LLM 处理前，先运行：
      ```bash
-     bash ${SKILL_DIR}/scripts/cache.sh check "<raw 文件路径>"
+     bash ${SKILL_DIR}/scripts/cache.sh check “<raw 文件路径>”
      ```
-   - 如果返回 `HIT` → 跳过本次 LLM 调用，直接读取已有 wiki 页面，并告诉用户这是“无变化，直接复用已有结果”
-   - 如果返回 `MISS` → 继续执行下面的两步流程
+   - 如果返回 `HIT` 或 `HIT(repaired)` → 跳过本次 LLM 调用，直接读取已有 wiki 页面，并告诉用户这是”无变化，直接复用已有结果”
+     - `HIT(repaired)` 表示缓存自愈修复成功（上次 update 被跳过但 source 页面存在）
+   - 如果返回 `MISS:<reason>` → 继续执行下面的两步流程
+     - `MISS:no_entry` — 首次处理此素材（正常情况）
+     - `MISS:hash_changed` — 素材内容有变化，需要重新处理
+     - `MISS:no_source` — 有缓存记录但 source 页面被删除了
 
 5. **Step 1：结构化分析**：
    - 输入：原始内容 + `purpose.md` + 现有 wiki 结构（至少读取 `index.md` 概要）
@@ -396,6 +400,15 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
      <!-- confidence: INFERRED -->
      <!-- confidence: AMBIGUOUS -->
      ```
+   - **写入 source 页面时，必须使用 `create-source-page.sh`**（自动更新缓存）：
+     ```bash
+     # 先把页面内容写到临时文件
+     echo "<页面内容>" > /tmp/source-content.tmp
+     # 调用脚本原子写入 + 缓存更新
+     bash ${SKILL_DIR}/scripts/create-source-page.sh "<raw 文件路径>" "wiki/sources/{日期}-{短标题}.md" /tmp/source-content.tmp
+     ```
+   - 如果脚本返回 `SUCCESS` → 写入和缓存都已更新
+   - 如果脚本返回 `ERROR` → 写入或缓存失败，检查报错信息后重试
 
 9. **更新或创建实体页**（`wiki/entities/`）：
    - 对每个关键概念，检查 `wiki/entities/` 下是否已有对应页面
@@ -412,13 +425,10 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
    - 在对应分类下添加新条目
    - 更新概览统计数字
 
-12. **更新 log.md 和缓存**：
+12. **更新 log.md**：
    - log.md 追加格式：`## {日期} ingest | {素材标题}`
    - 记录新增和更新的页面列表
-   - 当前流程成功写完后，运行：
-     ```bash
-     bash ${SKILL_DIR}/scripts/cache.sh update "<raw 文件路径>" "wiki/sources/{日期}-{短标题}.md"
-     ```
+   - 注意：缓存更新已在 Step 8 通过 `create-source-page.sh` 自动完成，此处无需再调用 `cache.sh update`
 
 13. **向用户展示结果**（按 `WIKI_LANG` 切换语言）：
 
@@ -447,14 +457,15 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 2. **读取上下文并检查缓存**：
    - 仍然优先读取 `purpose.md`
    - 仍然先运行 `bash ${SKILL_DIR}/scripts/cache.sh check "<raw 文件路径>"`
-   - 如果缓存命中，直接复用已有结果
+   - 如果缓存命中（`HIT` 或 `HIT(repaired)`），直接复用已有结果
 3. **生成简化摘要页**（`wiki/sources/`）：
    - 只包含基本信息和核心观点
    - 不写"原文精彩摘录"部分
+   - **写入 source 页面时同样使用 `create-source-page.sh`**（自动更新缓存）
 4. **提取 1-3 个关键概念**：
    - 如果对应实体页已存在 → 追加一句话说明
    - 如果不存在 → 在摘要页中用 `[待创建: [[概念名]]]` 标记
-5. **更新 index.md、log.md 和缓存**
+5. **更新 index.md 和 log.md**（缓存已由 `create-source-page.sh` 自动更新）
 6. **跳过**：主题页创建/更新、overview 更新
 
 7. **向用户展示简化结果**（按 `WIKI_LANG` 切换语言）：
