@@ -1,6 +1,6 @@
 #!/bin/bash
 # 外挂状态检测脚本：统一判断可选外挂的安装/环境/运行状态
-# 五种状态：not_installed / env_unavailable / runtime_failed / unsupported / empty_result
+# 五种状态：not_installed / env_unavailable（仅 uv 依赖的来源） / runtime_failed / unsupported / empty_result
 
 set -euo pipefail
 
@@ -123,7 +123,7 @@ default_install_hint() {
   esac
 }
 
-env_install_hint() {
+optional_hint() {
   local source_id="$1"
 
   case "$source_id" in
@@ -194,7 +194,7 @@ EOF
             state="env_unavailable"
             detail="缺少 uv，当前无法准备微信公众号自动提取环境"
             recovery_action="先补环境；现在也可以直接走手动入口"
-            install_hint="$(env_install_hint "$source_id")"
+            install_hint="$(optional_hint "$source_id")"
           elif ! dependency_installed "$dependency_name" "$dependency_type"; then
             state="not_installed"
             detail="未找到 ${adapter_name}"
@@ -222,7 +222,7 @@ EOF
             else
               detail="${adapter_name} 已可用；未检测到 9222，将在需要时自动拉起临时浏览器"
               recovery_action="继续自动提取；如需复用已登录会话，可先开启 Chrome 调试端口 9222"
-              install_hint="$(env_install_hint "$source_id")"
+              install_hint="$(optional_hint "$source_id")"
             fi
           fi
           ;;
@@ -236,7 +236,7 @@ EOF
             state="env_unavailable"
             detail="缺少 uv，当前无法运行 YouTube 字幕提取"
             recovery_action="先补环境；现在也可以直接走手动入口"
-            install_hint="$(env_install_hint "$source_id")"
+            install_hint="$(optional_hint "$source_id")"
           else
             state="available"
             detail="${adapter_name} 已可用"

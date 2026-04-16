@@ -100,8 +100,8 @@ exit 1'
         bash "$tmp_dir/repo/scripts/adapter-state.sh" check web_article 2>&1
     )" || fail "adapter-state should understand bundled deps from a source checkout"
 
-    assert_text_contains "$output" "env_unavailable"
-    assert_text_contains "$output" "Chrome"
+    assert_text_contains "$output" "available"
+    assert_text_contains "$output" "临时浏览器"
 }
 
 test_adapter_state_distinguishes_not_installed_and_unsupported() {
@@ -131,7 +131,7 @@ exit 0'
     assert_text_contains "$output" "请先从 App 或网页复制内容"
 }
 
-test_adapter_state_distinguishes_web_capture_availability_and_uv_env_unavailable() {
+test_web_capture_available_without_chrome_debug_port() {
     local tmp_dir output
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' RETURN
@@ -150,6 +150,40 @@ exit 1'
     assert_text_contains "$output" "available"
     assert_text_contains "$output" "临时浏览器"
     assert_text_contains "$output" "9222"
+}
+
+test_web_capture_available_with_chrome_debug_port() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+
+    mkdir -p "$tmp_dir/bin" "$tmp_dir/skills"
+    prepare_skill_root "$tmp_dir/skills"
+
+    make_stub "$tmp_dir/bin/lsof" '#!/bin/sh
+exit 0'
+
+    output="$(
+        PATH="$tmp_dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+        bash "$REPO_ROOT/scripts/adapter-state.sh" --skill-root "$tmp_dir/skills" check web_article 2>&1
+    )" || fail "adapter-state should report available with Chrome debug session"
+
+    assert_text_contains "$output" "available"
+    assert_text_contains "$output" "可复用的 Chrome 调试会话"
+    # install_hint 应为"-"，不应出现"补充说明"
+    assert_text_not_contains "$output" "9222"
+}
+
+test_uv_backed_source_reports_env_unavailable_without_uv() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+
+    mkdir -p "$tmp_dir/bin" "$tmp_dir/skills"
+    prepare_skill_root "$tmp_dir/skills"
+
+    make_stub "$tmp_dir/bin/lsof" '#!/bin/sh
+exit 1'
 
     output="$(
         PATH="$tmp_dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
@@ -268,12 +302,37 @@ test_skill_routes_ingest_and_status_through_adapter_state_model() {
     assert_file_contains "$REPO_ROOT/SKILL.md" "--with-optional-adapters"
 }
 
+test_summary_human_shows_supplementary_label_for_available_with_hint() {
+    local tmp_dir output
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+
+    mkdir -p "$tmp_dir/bin" "$tmp_dir/skills"
+    prepare_skill_root "$tmp_dir/skills"
+
+    # lsof 返回 1 → Chrome 9222 未监听 → state=available + install_hint 非空
+    make_stub "$tmp_dir/bin/lsof" '#!/bin/sh
+exit 1'
+
+    output="$(
+        PATH="$tmp_dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+        bash "$REPO_ROOT/scripts/adapter-state.sh" --skill-root "$tmp_dir/skills" summary-human 2>&1
+    )" || fail "summary-human should succeed"
+
+    # available + 有 install_hint → 应显示"补充说明"
+    assert_text_contains "$output" "补充说明"
+}
+
 test_adapter_state_distinguishes_not_installed_and_unsupported
 test_bundled_adapters_are_not_treated_as_installed_from_repo_checkout
-test_adapter_state_distinguishes_web_capture_availability_and_uv_env_unavailable
+test_source_checkout_uses_repo_deps_for_bundled_adapters
+test_web_capture_available_without_chrome_debug_port
+test_web_capture_available_with_chrome_debug_port
+test_uv_backed_source_reports_env_unavailable_without_uv
 test_adapter_state_distinguishes_runtime_failed_and_empty_result
 test_classify_run_preserves_preflight_failures
 test_install_reports_adapter_states_from_shared_model
 test_skill_routes_ingest_and_status_through_adapter_state_model
+test_summary_human_shows_supplementary_label_for_available_with_hint
 
 echo "Adapter state checks passed."
