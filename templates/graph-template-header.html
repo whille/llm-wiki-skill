@@ -667,6 +667,9 @@ button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
   重跑 <code>/llm-wiki graph</code>。
 </div>
 
-<!-- graph-data.json 由 build-graph-html.sh 在此之后拼接注入：
-     <script id="graph-data" type="application/json">{ ... }</script>
-     之后再拼接 footer.html（含 vis-network/marked/purify 加载和初始化 JS）。 -->
+<!-- build-graph-html.sh 在此之后按顺序拼接：
+     1) graph-data.json 内容（JSON 内嵌前先做 </script> → <\/script> 转义）
+     2) templates/graph-template-footer.html（含 </script> 闭标签、
+        vis-network/marked/purify 加载、以及交互初始化脚本）。 -->
+<script id="graph-data" type="application/json">
+
