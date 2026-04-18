@@ -1,0 +1,20 @@
+# 项目级 LLM-Wiki 配置
+# 将此文件放在 Git 项目根目录
+
+# 监控目录（相对路径，Git Hook 检测这些目录的变更）
+watch_dirs:
+  - src/
+  - lib/
+  - scripts/
+
+# Wiki 目录（相对于项目根目录）
+wiki_dir: wiki/
+
+# 原始素材目录
+raw_dir: raw/
+
+# 是否启用代码变更自动触发（通过 Git Hook）
+git_hook_enabled: false
+
+# 变更文件数量阈值（超过此数量时提示建议 digest）
+digest_threshold: 5

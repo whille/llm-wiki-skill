@@ -124,6 +124,7 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 | "画个知识图谱"、"看看关联图"、"graph"、"知识库地图" | → **graph** |
 | "删除素材"、"remove"、"delete source"、"移除" | → **delete** |
 | "结晶化"、"crystallize"、"把这个记进知识库"、"总结这段对话" | → **crystallize** |
+| "安装 Git Hook"、"启用代码变更监控"、"项目级 wiki" | → **git-hook** |
 
 **重要**：如果用户直接给了一个 URL 或文件，但没有明确说要做什么，默认走 **ingest** 工作流。如果知识库还不存在，先自动走 **init** 再走 **ingest**。
 
@@ -1066,3 +1067,87 @@ bash ${SKILL_DIR}/scripts/adapter-state.sh classify-run <source_id> <exit_code> 
 **输出示例**：
 已创建 wiki/synthesis/sessions/AI-agent-设计决策-20260413.md
 已更新 log.md
+
+---
+
+## 工作流 11：git-hook（项目级 Git Hook）
+
+**触发条件**：
+用户说"安装 Git Hook"、"启用代码变更监控"、"项目级 wiki"、"Git 提交后自动提示"
+
+**用途**：
+在 Git 项目中安装 post-commit hook，检测代码变更并提示运行 wiki digest。适用于将代码仓库作为知识库素材源的项目。
+
+### 前置检查
+
+执行**通用前置检查**（见上方定义）。如果没有可用知识库，提示用户先初始化。
+
+### 步骤
+
+1. **确认项目类型**：
+   - 检查当前目录是否是 Git 仓库
+   - 如果不是，提示用户在 Git 项目中运行
+
+2. **运行安装脚本**：
+   ```bash
+   bash ${SKILL_DIR}/scripts/install-git-hook.sh
+   ```
+
+3. **解释安装结果**：
+
+   **zh**：
+   ```
+   Git Hook 已安装！
+
+   安装位置：
+   - Hook: .git/hooks/post-commit
+   - 配置: .llm-wiki.yaml（项目根目录）
+
+   工作原理：
+   - 每次提交后检测 watch_dirs 配置的目录变更
+   - 变更文件数 >= digest_threshold 时输出提示
+
+   下一步：
+   - 编辑 .llm-wiki.yaml 配置监控目录
+   - 正常 git commit，变更达标时自动提示
+   ```
+   （英文版按「输出语言规则」生成，结构相同。）
+
+### 配置文件说明
+
+`.llm-wiki.yaml` 配置示例：
+
+```yaml
+# 监控目录（相对项目根目录）
+watch_dirs:
+  - src/
+  - lib/
+  - scripts/
+
+# Wiki 目录
+wiki_dir: wiki/
+
+# 原始素材目录
+raw_dir: raw/
+
+# 触发提示的最小变更文件数
+digest_threshold: 5
+```
+
+### 卸载
+
+```bash
+bash ${SKILL_DIR}/scripts/install-git-hook.sh --uninstall
+```
+
+### 使用场景
+
+1. **代码文档同步**：代码变更后自动提示更新相关文档
+2. **项目知识库**：将项目代码作为素材源，自动检测值得记录的变更
+3. **团队协作**：配合项目 wiki，提醒成员同步文档
+
+### 注意事项
+
+- Git Hook 只在提交时检测变更，不会自动执行 digest
+- 提示信息需要用户手动响应，运行 `wiki digest --code`
+- 如需禁用，编辑 `.llm-wiki.yaml` 设置 `git_hook_enabled: false`
