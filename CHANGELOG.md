@@ -2,13 +2,9 @@
 
 ## v2.7.0 (2026-04-18)
 
-### 新增
-
-- `CLAUDE.md` Git 流程规则：代码变更后 Agent 自动检测并提示更新 Wiki（不依赖 git hook）
-
 ### 移除
 
-- Git Hook 相关功能（`scripts/install-git-hook.sh`、`templates/post-commit-hook.sh`、`templates/project-config.yaml`）：git hook 无法触发 Agent 行为，改用 CLAUDE.md rule 实现
+- Git Hook 相关功能（`scripts/install-git-hook.sh`、`templates/post-commit-hook.sh`、`templates/project-config.yaml`）：git hook 无法触发 Agent 行为，移除以保持精简
 
 ## v2.6.0 (2026-04-17)
 
