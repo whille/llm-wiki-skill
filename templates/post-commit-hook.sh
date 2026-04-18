@@ -10,13 +10,13 @@ CONFIG_FILE="$PROJECT_ROOT/.llm-wiki.yaml"
 
 # 默认配置
 WATCH_DIRS="src/ lib/ scripts/"
-DIGEST_THRESHOLD=5
+LINE_THRESHOLD=100
 
 # 读取项目配置（如果存在）
 if [ -f "$CONFIG_FILE" ]; then
   # 解析 YAML（简单实现，不依赖 yq）
   WATCH_DIRS=$(grep -E "^watch_dirs:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | tr '\n' ' ' || echo "$WATCH_DIRS")
-  DIGEST_THRESHOLD=$(grep "digest_threshold:" "$CONFIG_FILE" 2>/dev/null | awk '{print $2}' || echo "$DIGEST_THRESHOLD")
+  LINE_THRESHOLD=$(grep "line_threshold:" "$CONFIG_FILE" 2>/dev/null | awk '{print $2}' || echo "$LINE_THRESHOLD")
 fi
 
 # 构建 grep 正则匹配监视目录
@@ -28,37 +28,57 @@ for dir in $WATCH_DIRS; do
   WATCH_PATTERN="$WATCH_PATTERN^$dir"
 done
 
-# 获取本次提交变更的文件
+# 获取提交范围
 if [ -f "$PROJECT_ROOT/.git/COMMIT_EDITMSG" ]; then
-  # 正常提交
-  CHANGE_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E "$WATCH_PATTERN" | head -20 || true)
+  DIFF_RANGE="HEAD~1 HEAD"
 else
-  # 首次提交或无父提交
-  CHANGE_FILES=$(git diff --name-only --cached HEAD 2>/dev/null | grep -E "$WATCH_PATTERN" | head -20 || true)
+  DIFF_RANGE="--cached HEAD"
 fi
 
-# 统计变更文件数
-if [ -n "$CHANGE_FILES" ]; then
-  COUNT=$(echo "$CHANGE_FILES" | wc -l | tr -d ' ')
+# 获取变更文件的增删行数统计
+# numstat 格式: added\tdeleted\tfilename
+STAT_OUTPUT=$(git diff --numstat $DIFF_RANGE 2>/dev/null | grep -E "$WATCH_PATTERN" || true)
 
-  # 只在变更文件数 >= 阈值时提示
-  if [ "$COUNT" -ge "$DIGEST_THRESHOLD" ]; then
-    echo ""
-    echo "================================================"
-    echo "检测到 $COUNT 个代码文件变更"
-    echo ""
-    echo "变更文件："
-    echo "$CHANGE_FILES" | head -10 | while read -r file; do
-      echo "  - $file"
-    done
-    if [ "$COUNT" -gt 10 ]; then
-      echo "  ... 还有 $((COUNT - 10)) 个文件"
-    fi
-    echo ""
-    echo "建议: 运行 'wiki digest --code' 更新文档"
-    echo "================================================"
-    echo ""
+if [ -z "$STAT_OUTPUT" ]; then
+  exit 0
+fi
+
+# 统计总增删行数
+TOTAL_ADDED=0
+TOTAL_DELETED=0
+FILE_COUNT=0
+
+while IFS=$'\t' read -r added deleted filename; do
+  # 跳过二进制文件（显示为 -）
+  if [ "$added" = "-" ] || [ "$deleted" = "-" ]; then
+    continue
   fi
+  TOTAL_ADDED=$((TOTAL_ADDED + added))
+  TOTAL_DELETED=$((TOTAL_DELETED + deleted))
+  FILE_COUNT=$((FILE_COUNT + 1))
+done <<< "$STAT_OUTPUT"
+
+TOTAL_LINES=$((TOTAL_ADDED + TOTAL_DELETED))
+
+# 只在代码行变化 >= 阈值时提示
+if [ "$TOTAL_LINES" -ge "$LINE_THRESHOLD" ]; then
+  echo ""
+  echo "================================================"
+  echo "检测到代码变更：+$TOTAL_ADDED / -$TOTAL_DELETED（共 $TOTAL_LINES 行，$FILE_COUNT 个文件）"
+  echo ""
+  echo "变更文件："
+  echo "$STAT_OUTPUT" | head -10 | while IFS=$'\t' read -r added deleted filename; do
+    if [ "$added" != "-" ] && [ "$deleted" != "-" ]; then
+      echo "  - $filename (+$added/-$deleted)"
+    fi
+  done
+  if [ "$FILE_COUNT" -gt 10 ]; then
+    echo "  ... 还有 $((FILE_COUNT - 10)) 个文件"
+  fi
+  echo ""
+  echo "建议: 运行 'wiki digest --code' 更新文档"
+  echo "================================================"
+  echo ""
 fi
 
 exit 0

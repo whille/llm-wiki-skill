@@ -70,7 +70,7 @@ install_config() {
   echo ""
   echo "请根据项目需要编辑配置文件:"
   echo "  - watch_dirs: 监控的代码目录"
-  echo "  - digest_threshold: 触发提示的最小变更文件数"
+  echo "  - line_threshold: 触发提示的最小代码行变化"
 }
 
 uninstall_hook() {
@@ -123,7 +123,7 @@ else
   echo "使用方式:"
   echo "  1. 编辑 .llm-wiki.yaml 配置监控目录"
   echo "  2. 正常 git commit 提交代码"
-  echo "  3. 变更文件数 >= 阈值时自动提示"
+  echo "  3. 代码行变化 >= 阈值时自动提示"
   echo ""
   echo "卸载: bash $0 --uninstall"
 fi

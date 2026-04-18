@@ -16,5 +16,5 @@ raw_dir: raw/
 # 是否启用代码变更自动触发（通过 Git Hook）
 git_hook_enabled: false
 
-# 变更文件数量阈值（超过此数量时提示建议 digest）
-digest_threshold: 5
+# 代码行变化阈值（增删行数之和 >= 此值时提示建议 digest）
+line_threshold: 100
