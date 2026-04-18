@@ -6,6 +6,37 @@
 - [platforms/claude/CLAUDE.md](platforms/claude/CLAUDE.md)：Claude 专属入口提示
 - [SKILL.md](SKILL.md)：核心能力和工作流
 
+---
+
+## Git 流程规则
+
+### 代码变更后更新 Wiki
+
+**触发条件**：
+- Agent 识别到用户要提交 git（说 "commit"、"提交"、"push"）
+- 项目有 wiki（存在 `.wiki-schema.md` 或 `wiki/index.md`）
+
+**执行流程**：
+
+```
+用户: "commit these changes"
+       ↓
+Agent 检测变更规模 (git diff --stat HEAD~1 HEAD)
+       ↓
+变更行数 >= 100？
+  ├── 否 → 静默跳过，正常 commit
+  └── 是 → 提示用户
+           "检测到代码变更较大，是否运行 /llm-wiki-skill digest --code？"
+       ↓
+用户: "是"
+       ↓
+Agent: 执行 /llm-wiki-skill digest --code
+```
+
+**注意**：不依赖 git hook，纯靠 Agent 理解意图。
+
+---
+
 ## Claude 安装动作
 
 如果当前任务是安装这个 skill，优先执行：

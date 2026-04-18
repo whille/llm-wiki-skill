@@ -2,9 +2,13 @@
 
 ## v2.7.0 (2026-04-18)
 
+### 新增
+
+- `CLAUDE.md` Git 流程规则：Agent 在用户提交代码时检测变更规模，超过阈值提示更新 Wiki
+
 ### 移除
 
-- Git Hook 相关功能（`scripts/install-git-hook.sh`、`templates/post-commit-hook.sh`、`templates/project-config.yaml`）：git hook 无法触发 Agent 行为，移除以保持精简
+- Git Hook 相关功能（`scripts/install-git-hook.sh`、`templates/post-commit-hook.sh`、`templates/project-config.yaml`）：git hook 无法触发 Agent 行为，改用 CLAUDE.md rule
 
 ## v2.6.0 (2026-04-17)
 
