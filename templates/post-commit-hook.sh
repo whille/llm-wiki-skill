@@ -10,16 +10,14 @@ PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
 CONFIG_FILE="$PROJECT_ROOT/.llm-wiki.yaml"
 
 # 默认配置
-EXCLUDE_DIRS="wiki/ data/ results/ output/ logs/ __pycache__/ .pytest_cache/ .ruff_cache/ node_modules/"
-EXCLUDE_PATTERNS="*.json *.txt *.log *.md"
+EXCLUDE_DIRS="wiki/ data/ results/ output/ logs/"
+EXCLUDE_PATTERNS="*.md"
 LINE_THRESHOLD=100
 
 # 读取项目配置（如果存在）
 if [ -f "$CONFIG_FILE" ]; then
-  # 解析 exclude_dirs
-  EXCLUDE_DIRS=$(grep -E "^exclude_dirs:" -A 20 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | tr '\n' ' ' || echo "$EXCLUDE_DIRS")
-  # 解析 exclude_patterns（简单处理，去掉 *)
-  EXCLUDE_PATTERNS=$(grep -E "^exclude_patterns:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | sed 's/\"//g' | tr '\n' ' ' || echo "$EXCLUDE_PATTERNS")
+  EXCLUDE_DIRS=$(grep -E "^exclude_dirs:" -A 20 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | sed 's/"//g' | tr '\n' ' ' || echo "$EXCLUDE_DIRS")
+  EXCLUDE_PATTERNS=$(grep -E "^exclude_patterns:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | sed 's/"//g' | tr '\n' ' ' || echo "$EXCLUDE_PATTERNS")
   LINE_THRESHOLD=$(grep "line_threshold:" "$CONFIG_FILE" 2>/dev/null | awk '{print $2}' || echo "$LINE_THRESHOLD")
 fi
 
@@ -30,7 +28,7 @@ else
   DIFF_RANGE="--cached HEAD"
 fi
 
-# 构建排除目录的正则（用于 grep -v）
+# 构建排除目录的正则
 EXCLUDE_DIR_PATTERN=""
 for dir in $EXCLUDE_DIRS; do
   dir=$(echo "$dir" | sed 's:/$::')
@@ -40,8 +38,7 @@ for dir in $EXCLUDE_DIRS; do
   EXCLUDE_DIR_PATTERN="$EXCLUDE_DIR_PATTERN^$dir/"
 done
 
-# 获取变更文件的增删行数统计，并排除指定目录
-# numstat 格式: added\tdeleted\tfilename
+# 获取变更文件统计，排除指定目录
 if [ -n "$EXCLUDE_DIR_PATTERN" ]; then
   STAT_OUTPUT=$(git diff --numstat $DIFF_RANGE 2>/dev/null | grep -vE "$EXCLUDE_DIR_PATTERN" || true)
 else
@@ -52,39 +49,29 @@ if [ -z "$STAT_OUTPUT" ]; then
   exit 0
 fi
 
-# 构建 grep 排除参数（排除文件模式）
-EXCLUDE_GREP_ARGS=""
-for pattern in $EXCLUDE_PATTERNS; do
-  # 移除通配符后缀
-  base_pattern=$(echo "$pattern" | sed 's/\*\.//g' | sed 's/\*$//g')
-  if [ -n "$EXCLUDE_GREP_ARGS" ]; then
-    EXCLUDE_GREP_ARGS="$EXCLUDE_GREP_ARGS --ignore=$base_pattern"
-  else
-    EXCLUDE_GREP_ARGS="--ignore=$base_pattern"
-  fi
-done
-
-# 如果有排除模式，再次过滤
-if [ -n "$EXCLUDE_PATTERNS" ]; then
-  FILTERED_OUTPUT=""
-  while IFS=$'\t' read -r added deleted filename; do
-    skip=false
-    for pattern in $EXCLUDE_PATTERNS; do
-      # 简单模式匹配（支持 *.ext 格式）
-      ext=$(echo "$pattern" | sed 's/\*\.//')
-      if [[ "$filename" == *".$ext" ]]; then
-        skip=true
-        break
-      fi
-    done
-    if [ "$skip" = false ]; then
-      printf '%s\t%s\t%s\n' "$added" "$deleted" "$filename"
+# 过滤排除文件模式
+FILTERED=""
+while IFS=$'\t' read -r added deleted filename; do
+  skip=0
+  # 遍历所有排除模式
+  while IFS= read -r pattern; do
+    [ -z "$pattern" ] && continue
+    ext=$(echo "$pattern" | sed 's/\*\.//' | tr -d ' ')
+    if [[ "$filename" == *".$ext" ]]; then
+      skip=1
+      break
     fi
-  done <<< "$STAT_OUTPUT"
-  STAT_OUTPUT="$FILTERED_OUTPUT"
-fi
+  done < <(grep -E "^exclude_patterns:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | sed 's/"//g')
+  if [ "$skip" -eq 0 ]; then
+    if [ -n "$FILTERED" ]; then
+      FILTERED="${FILTERED}"$'\n'"${added}"$'\t'"${deleted}"$'\t'"${filename}"
+    else
+      FILTERED="${added}"$'\t'"${deleted}"$'\t'"${filename}"
+    fi
+  fi
+done <<< "$STAT_OUTPUT"
 
-if [ -z "$STAT_OUTPUT" ]; then
+if [ -z "$FILTERED" ]; then
   exit 0
 fi
 
@@ -94,14 +81,13 @@ TOTAL_DELETED=0
 FILE_COUNT=0
 
 while IFS=$'\t' read -r added deleted filename; do
-  # 跳过二进制文件（显示为 -）
   if [ "$added" = "-" ] || [ "$deleted" = "-" ]; then
     continue
   fi
   TOTAL_ADDED=$((TOTAL_ADDED + added))
   TOTAL_DELETED=$((TOTAL_DELETED + deleted))
   FILE_COUNT=$((FILE_COUNT + 1))
-done <<< "$STAT_OUTPUT"
+done <<< "$FILTERED"
 
 TOTAL_LINES=$((TOTAL_ADDED + TOTAL_DELETED))
 
@@ -109,10 +95,10 @@ TOTAL_LINES=$((TOTAL_ADDED + TOTAL_DELETED))
 if [ "$TOTAL_LINES" -ge "$LINE_THRESHOLD" ]; then
   echo ""
   echo "================================================"
-  echo "检测到代码变更：+$TOTAL_ADDED / -$TOTAL_DELETED（共 $TOTAL_LINES 行，$FILE_COUNT 个文件）"
+  echo "检测到代码变更：+${TOTAL_ADDED} / -${TOTAL_DELETED}（共 ${TOTAL_LINES} 行，${FILE_COUNT} 个文件）"
   echo ""
   echo "变更文件："
-  echo "$STAT_OUTPUT" | head -10 | while IFS=$'\t' read -r added deleted filename; do
+  echo "$FILTERED" | head -10 | while IFS=$'\t' read -r added deleted filename; do
     if [ "$added" != "-" ] && [ "$deleted" != "-" ]; then
       echo "  - $filename (+$added/-$deleted)"
     fi
