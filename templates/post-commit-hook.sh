@@ -1,6 +1,7 @@
 #!/bin/bash
 # Git post-commit hook for llm-wiki
 # 检测代码变更并提示运行 wiki digest
+# 支持排除模式：监控所有代码，排除非代码目录和文件
 
 set -euo pipefail
 
@@ -9,24 +10,18 @@ PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
 CONFIG_FILE="$PROJECT_ROOT/.llm-wiki.yaml"
 
 # 默认配置
-WATCH_DIRS="src/ lib/ scripts/"
+EXCLUDE_DIRS="wiki/ data/ results/ output/ logs/ __pycache__/ .pytest_cache/ .ruff_cache/ node_modules/"
+EXCLUDE_PATTERNS="*.json *.txt *.log *.md"
 LINE_THRESHOLD=100
 
 # 读取项目配置（如果存在）
 if [ -f "$CONFIG_FILE" ]; then
-  # 解析 YAML（简单实现，不依赖 yq）
-  WATCH_DIRS=$(grep -E "^watch_dirs:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | tr '\n' ' ' || echo "$WATCH_DIRS")
+  # 解析 exclude_dirs
+  EXCLUDE_DIRS=$(grep -E "^exclude_dirs:" -A 20 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | tr '\n' ' ' || echo "$EXCLUDE_DIRS")
+  # 解析 exclude_patterns（简单处理，去掉 *)
+  EXCLUDE_PATTERNS=$(grep -E "^exclude_patterns:" -A 10 "$CONFIG_FILE" 2>/dev/null | grep -E "^  - " | sed 's/  - //' | sed 's/\"//g' | tr '\n' ' ' || echo "$EXCLUDE_PATTERNS")
   LINE_THRESHOLD=$(grep "line_threshold:" "$CONFIG_FILE" 2>/dev/null | awk '{print $2}' || echo "$LINE_THRESHOLD")
 fi
-
-# 构建 grep 正则匹配监视目录
-WATCH_PATTERN=""
-for dir in $WATCH_DIRS; do
-  if [ -n "$WATCH_PATTERN" ]; then
-    WATCH_PATTERN="$WATCH_PATTERN|"
-  fi
-  WATCH_PATTERN="$WATCH_PATTERN^$dir"
-done
 
 # 获取提交范围
 if [ -f "$PROJECT_ROOT/.git/COMMIT_EDITMSG" ]; then
@@ -35,9 +30,59 @@ else
   DIFF_RANGE="--cached HEAD"
 fi
 
-# 获取变更文件的增删行数统计
+# 构建排除目录的正则（用于 grep -v）
+EXCLUDE_DIR_PATTERN=""
+for dir in $EXCLUDE_DIRS; do
+  dir=$(echo "$dir" | sed 's:/$::')
+  if [ -n "$EXCLUDE_DIR_PATTERN" ]; then
+    EXCLUDE_DIR_PATTERN="$EXCLUDE_DIR_PATTERN|"
+  fi
+  EXCLUDE_DIR_PATTERN="$EXCLUDE_DIR_PATTERN^$dir/"
+done
+
+# 获取变更文件的增删行数统计，并排除指定目录
 # numstat 格式: added\tdeleted\tfilename
-STAT_OUTPUT=$(git diff --numstat $DIFF_RANGE 2>/dev/null | grep -E "$WATCH_PATTERN" || true)
+if [ -n "$EXCLUDE_DIR_PATTERN" ]; then
+  STAT_OUTPUT=$(git diff --numstat $DIFF_RANGE 2>/dev/null | grep -vE "$EXCLUDE_DIR_PATTERN" || true)
+else
+  STAT_OUTPUT=$(git diff --numstat $DIFF_RANGE 2>/dev/null || true)
+fi
+
+if [ -z "$STAT_OUTPUT" ]; then
+  exit 0
+fi
+
+# 构建 grep 排除参数（排除文件模式）
+EXCLUDE_GREP_ARGS=""
+for pattern in $EXCLUDE_PATTERNS; do
+  # 移除通配符后缀
+  base_pattern=$(echo "$pattern" | sed 's/\*\.//g' | sed 's/\*$//g')
+  if [ -n "$EXCLUDE_GREP_ARGS" ]; then
+    EXCLUDE_GREP_ARGS="$EXCLUDE_GREP_ARGS --ignore=$base_pattern"
+  else
+    EXCLUDE_GREP_ARGS="--ignore=$base_pattern"
+  fi
+done
+
+# 如果有排除模式，再次过滤
+if [ -n "$EXCLUDE_PATTERNS" ]; then
+  FILTERED_OUTPUT=""
+  while IFS=$'\t' read -r added deleted filename; do
+    skip=false
+    for pattern in $EXCLUDE_PATTERNS; do
+      # 简单模式匹配（支持 *.ext 格式）
+      ext=$(echo "$pattern" | sed 's/\*\.//')
+      if [[ "$filename" == *".$ext" ]]; then
+        skip=true
+        break
+      fi
+    done
+    if [ "$skip" = false ]; then
+      printf '%s\t%s\t%s\n' "$added" "$deleted" "$filename"
+    fi
+  done <<< "$STAT_OUTPUT"
+  STAT_OUTPUT="$FILTERED_OUTPUT"
+fi
 
 if [ -z "$STAT_OUTPUT" ]; then
   exit 0
